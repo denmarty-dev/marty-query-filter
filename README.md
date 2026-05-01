@@ -147,16 +147,6 @@ composer test
 composer lint
 ```
 
-## Publishing
-
-Recommended release flow:
-
-1. Create a dedicated GitHub repository from this package directory.
-2. Push the code to `main` or `master`.
-3. Create a release tag such as `v1.0.0`.
-4. Submit the repository URL to Packagist.
-5. Trigger updates in Packagist on future tags.
-
 ## License
 
 MIT
