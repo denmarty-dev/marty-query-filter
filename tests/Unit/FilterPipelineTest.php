@@ -10,9 +10,13 @@ use Orchestra\Testbench\TestCase;
 uses(TestCase::class);
 
 it('skips unknown filter keys', function (): void {
-    $pipeline = new FilterPipeline([
-        'mileage' => PipelineMileageFilter::class,
-    ]);
+    $pipeline = new FilterPipeline(
+        filters: [
+            'mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
+        ],
+    );
 
     $query = PipelineLot::query();
     $originalSql = $query->toSql();
@@ -24,16 +28,34 @@ it('skips unknown filter keys', function (): void {
 });
 
 it('fails on duplicate normalized filter keys', function (): void {
-    expect(fn (): FilterPipeline => new FilterPipeline([
-        'mileage' => PipelineMileageFilter::class,
-        'Mileage' => PipelineMileageFilter::class,
-    ]))->toThrow(InvalidArgumentException::class, 'Duplicate filter key "mileage"');
+    expect(fn (): FilterPipeline => new FilterPipeline(
+        filters: [
+            'mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
+            'Mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
+        ],
+    ))->toThrow(InvalidArgumentException::class, 'Duplicate filter key "mileage"');
 });
 
 it('fails when filter does not implement query filter contract', function (): void {
-    expect(fn (): FilterPipeline => new FilterPipeline([
-        'invalid' => stdClass::class,
-    ]))->toThrow(InvalidArgumentException::class, 'must exist and implement');
+    expect(fn (): FilterPipeline => new FilterPipeline(
+        filters: [
+            'invalid' => [
+                'filter' => stdClass::class,
+            ],
+        ],
+    ))->toThrow(InvalidArgumentException::class, 'must exist and implement');
+});
+
+it('fails when filter is registered as plain class string', function (): void {
+    expect(fn (): FilterPipeline => new FilterPipeline(
+        filters: [
+            'mileage' => PipelineMileageFilter::class,
+        ],
+    ))->toThrow(InvalidArgumentException::class, 'must be a configuration array');
 });
 
 it('resolves filters via laravel container', function (): void {
@@ -41,9 +63,13 @@ it('resolves filters via laravel container', function (): void {
         return new PipelineContainerFilter('custom_injected_field');
     });
 
-    $pipeline = new FilterPipeline([
-        'injected' => PipelineContainerFilter::class,
-    ]);
+    $pipeline = new FilterPipeline(
+        filters: [
+            'injected' => [
+                'filter' => PipelineContainerFilter::class,
+            ],
+        ],
+    );
 
     $query = PipelineLot::query();
 
@@ -54,9 +80,13 @@ it('resolves filters via laravel container', function (): void {
 });
 
 it('applies search through filter registry', function (): void {
-    $pipeline = new FilterPipeline([
-        'mileage' => PipelineMileageFilter::class,
-    ]);
+    $pipeline = new FilterPipeline(
+        filters: [
+            'mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
+        ],
+    );
 
     $query = PipelineLot::query();
 
@@ -76,10 +106,56 @@ it('applies search through filter registry', function (): void {
     expect($query->getBindings())->toBe(['%elantra%']);
 });
 
+it('supports inline filter configuration arrays', function (): void {
+    $pipeline = new FilterPipeline(
+        filters: [
+            'auction_name' => [
+                'filter' => PipelineAuctionNameFilter::class,
+                'relation' => 'libAuctionName',
+            ],
+        ],
+    );
+
+    $query = PipelineLot::query();
+
+    $pipeline->apply($query, ['auction_name' => 'windmotors']);
+
+    expect($query->toSql())->toContain('exists');
+    expect($query->toSql())->toContain('lib_auction_names');
+    expect($query->toSql())->toContain('auction_name');
+    expect($query->getBindings())->toBe(['windmotors']);
+});
+
+it('supports top-level search shortcut configuration', function (): void {
+    $pipeline = new FilterPipeline(
+        filters: [
+            'auction_name' => [
+                'filter' => PipelineAuctionNameFilter::class,
+            ],
+        ],
+        search: [
+            'search_relations' => [
+                'libAuctionName' => ['auction_name'],
+            ],
+        ],
+    );
+
+    $query = PipelineLot::query();
+
+    $pipeline->apply($query, ['search' => 'windmotors']);
+
+    expect($query->toSql())->toContain('exists');
+    expect($query->toSql())->toContain('lib_auction_names');
+    expect($query->toSql())->toContain('auction_name');
+    expect($query->getBindings())->toBe(['%windmotors%']);
+});
+
 it('runtime filter parameters override constructor parameters', function (): void {
     $pipeline = new FilterPipeline(
         filters: [
-            'mileage' => PipelineMileageFilter::class,
+            'mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
         ],
         filterParameters: [
             'search' => [
@@ -110,7 +186,9 @@ it('runtime filter parameters override constructor parameters', function (): voi
 it('fails when filter parameters contain unknown key', function (): void {
     expect(fn (): FilterPipeline => new FilterPipeline(
         filters: [
-            'mileage' => PipelineMileageFilter::class,
+            'mileage' => [
+                'filter' => PipelineMileageFilter::class,
+            ],
         ],
         filterParameters: [
             'unknown_filter' => ['fields' => ['title']],
@@ -121,7 +199,9 @@ it('fails when filter parameters contain unknown key', function (): void {
 it('applies filter through configured relation', function (): void {
     $pipeline = new FilterPipeline(
         filters: [
-            'auction_name' => PipelineAuctionNameFilter::class,
+            'auction_name' => [
+                'filter' => PipelineAuctionNameFilter::class,
+            ],
         ],
         filterParameters: [
             'auction_name' => [
@@ -143,7 +223,9 @@ it('applies filter through configured relation', function (): void {
 it('fails when relation parameter is not valid string', function (): void {
     expect(fn (): FilterPipeline => new FilterPipeline(
         filters: [
-            'auction_name' => PipelineAuctionNameFilter::class,
+            'auction_name' => [
+                'filter' => PipelineAuctionNameFilter::class,
+            ],
         ],
         filterParameters: [
             'auction_name' => [
@@ -151,6 +233,16 @@ it('fails when relation parameter is not valid string', function (): void {
             ],
         ],
     ))->toThrow(InvalidArgumentException::class, 'must be a non-empty string');
+});
+
+it('fails when inline filter configuration misses filter class', function (): void {
+    expect(fn (): FilterPipeline => new FilterPipeline(
+        filters: [
+            'auction_name' => [
+                'relation' => 'libAuctionName',
+            ],
+        ],
+    ))->toThrow(InvalidArgumentException::class, 'must contain a non-empty "filter" class string');
 });
 
 class PipelineLot extends Model

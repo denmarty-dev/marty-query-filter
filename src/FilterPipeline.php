@@ -20,17 +20,32 @@ class FilterPipeline
     protected array $filterParameters;
 
     /**
-     * @param  array<string, class-string<QueryFilter>>  $filters
+     * @param  array<string, array<string, mixed>>  $filters
      * @param  array<string, array<string, mixed>>  $filterParameters
+     * @param  array<string, mixed>  $search
      */
-    public function __construct(array $filters, array $filterParameters = [])
+    public function __construct(array $filters, array $filterParameters = [], array $search = [])
     {
-        $this->filters = $this->normalizeFilters([
-            'search' => SearchFilter::class,
+        $normalizedFilters = $this->normalizeFilters([
+            'search' => [
+                'filter' => SearchFilter::class,
+            ],
             ...$filters,
         ]);
 
-        $this->filterParameters = $this->normalizeFilterParameters($filterParameters);
+        $this->filters = $normalizedFilters['filters'];
+
+        $searchParameters = $search === []
+            ? []
+            : $this->normalizeFilterParameters([
+                'search' => $this->normalizeSearchConfiguration($search),
+            ]);
+
+        $this->filterParameters = $this->mergeFilterParameters(
+            $normalizedFilters['parameters'],
+            $this->normalizeFilterParameters($filterParameters),
+            $searchParameters,
+        );
     }
 
     /**
@@ -102,28 +117,30 @@ class FilterPipeline
     }
 
     /**
-     * @param  array<string, class-string<QueryFilter>>  $filters
-     * @return array<string, class-string<QueryFilter>>
+     * @param  array<string, array<string, mixed>>  $filters
+     * @return array{
+     *     filters: array<string, class-string<QueryFilter>>,
+     *     parameters: array<string, array<string, mixed>>
+     * }
      */
     protected function normalizeFilters(array $filters): array
     {
         $registry = [];
+        $parameterRegistry = [];
 
-        foreach ($filters as $field => $filterClass) {
+        foreach ($filters as $field => $filterDefinition) {
             if (! is_string($field)) {
                 throw new InvalidArgumentException(
                     'Filter registry must use explicit string keys (normalized filter keys).'
                 );
             }
 
-            if (! is_string($filterClass)) {
-                throw new InvalidArgumentException('Filter class name must be a string.');
-            }
-
             $filterField = $this->normalizeFilterKey($field);
             if ($filterField === null) {
                 throw new InvalidArgumentException('Filter key must be a non-empty string.');
             }
+
+            [$filterClass, $filterParameters] = $this->normalizeFilterDefinition($filterField, $filterDefinition);
 
             if (! class_exists($filterClass) || ! is_subclass_of($filterClass, QueryFilter::class)) {
                 throw new InvalidArgumentException(sprintf(
@@ -142,9 +159,16 @@ class FilterPipeline
             }
 
             $registry[$filterField] = $filterClass;
+
+            if ($filterParameters !== []) {
+                $parameterRegistry[$filterField] = $filterParameters;
+            }
         }
 
-        return $registry;
+        return [
+            'filters' => $registry,
+            'parameters' => $parameterRegistry,
+        ];
     }
 
     /**
@@ -174,22 +198,6 @@ class FilterPipeline
                 ));
             }
 
-            if (! is_array($parameters)) {
-                throw new InvalidArgumentException(sprintf(
-                    'Filter parameters for "%s" must be an array.',
-                    $filterField
-                ));
-            }
-
-            if (array_key_exists('relation', $parameters)
-                && (! is_string($parameters['relation']) || trim($parameters['relation']) === '')
-            ) {
-                throw new InvalidArgumentException(sprintf(
-                    'Filter relation for "%s" must be a non-empty string.',
-                    $filterField
-                ));
-            }
-
             if (isset($registry[$filterField])) {
                 throw new InvalidArgumentException(sprintf(
                     'Duplicate filter parameter key "%s" in parameter registry.',
@@ -197,10 +205,101 @@ class FilterPipeline
                 ));
             }
 
-            $registry[$filterField] = $parameters;
+            $registry[$filterField] = $this->normalizeParameterSet($filterField, $parameters);
         }
 
         return $registry;
+    }
+
+    /**
+     * @return array{0: class-string<QueryFilter>, 1: array<string, mixed>}
+     */
+    protected function normalizeFilterDefinition(string $filterField, mixed $filterDefinition): array
+    {
+        if (! is_array($filterDefinition)) {
+            throw new InvalidArgumentException(sprintf(
+                'Filter definition for "%s" must be a configuration array.',
+                $filterField
+            ));
+        }
+
+        $filterClass = $filterDefinition['filter'] ?? null;
+        if (! is_string($filterClass) || trim($filterClass) === '') {
+            throw new InvalidArgumentException(sprintf(
+                'Filter configuration for "%s" must contain a non-empty "filter" class string.',
+                $filterField
+            ));
+        }
+
+        $parameters = $filterDefinition;
+        unset($parameters['filter']);
+
+        return [$filterClass, $this->normalizeParameterSet($filterField, $parameters)];
+    }
+
+    /**
+     * @param  array<string, mixed>  $parameters
+     * @return array<string, mixed>
+     */
+    protected function normalizeParameterSet(string $filterField, mixed $parameters): array
+    {
+        if (! is_array($parameters)) {
+            throw new InvalidArgumentException(sprintf(
+                'Filter parameters for "%s" must be an array.',
+                $filterField
+            ));
+        }
+
+        if (array_key_exists('relation', $parameters)
+            && (! is_string($parameters['relation']) || trim($parameters['relation']) === '')
+        ) {
+            throw new InvalidArgumentException(sprintf(
+                'Filter relation for "%s" must be a non-empty string.',
+                $filterField
+            ));
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * @param  array<string, mixed>  $search
+     * @return array<string, mixed>
+     */
+    protected function normalizeSearchConfiguration(array $search): array
+    {
+        $configuration = $search;
+
+        if (array_key_exists('search_fields', $configuration) && ! array_key_exists('fields', $configuration)) {
+            $configuration['fields'] = $configuration['search_fields'];
+        }
+
+        if (array_key_exists('search_relations', $configuration) && ! array_key_exists('relations', $configuration)) {
+            $configuration['relations'] = $configuration['search_relations'];
+        }
+
+        unset($configuration['search_fields'], $configuration['search_relations']);
+
+        return $configuration;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  ...$registries
+     * @return array<string, array<string, mixed>>
+     */
+    protected function mergeFilterParameters(array ...$registries): array
+    {
+        $merged = [];
+
+        foreach ($registries as $registry) {
+            foreach ($registry as $field => $parameters) {
+                $merged[$field] = isset($merged[$field])
+                    ? [...$merged[$field], ...$parameters]
+                    : $parameters;
+            }
+        }
+
+        return $merged;
     }
 
     /**

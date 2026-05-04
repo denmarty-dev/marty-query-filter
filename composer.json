@@ -1,5 +1,6 @@
 {
     "name": "denmarty/marty-query-filter",
+    "version": "1.0.0",
     "description": "Reusable query filter pipeline for Laravel Eloquent builders.",
     "type": "library",
     "license": "MIT",
